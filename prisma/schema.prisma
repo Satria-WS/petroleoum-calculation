@@ -1,0 +1,182 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  ENGINEER
+  REVIEWER
+  ADMIN
+}
+
+enum UnitSystem {
+  FIELD
+  SI
+}
+
+enum WellType {
+  OIL
+  GAS
+  CONDENSATE
+}
+
+enum ProjectStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum EngineeringDomain {
+  RESERVOIR
+  PRODUCTION
+  DRILLING
+}
+
+enum ModuleType {
+  VOLUMETRIC_MONTE_CARLO
+  DCA_ARPS
+  MATERIAL_BALANCE
+  NODAL_ANALYSIS
+  ARTIFICIAL_LIFT
+  DRILLING_HYDRAULICS
+  KILL_SHEET
+}
+
+enum CaseStatus {
+  DRAFT
+  VERIFIED
+}
+
+model User {
+  id                  String             @id @default(cuid())
+  name                String
+  email               String             @unique
+  emailVerified       Boolean            @default(false)
+  image               String?
+  passwordHash        String?
+  role                Role               @default(ENGINEER)
+  preferredUnitSystem UnitSystem         @default(FIELD)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  // Better-Auth Relations
+  sessions            Session[]
+  accounts            Account[]
+
+  // Domain Relations
+  projects            Project[]
+  calculationCases    CalculationCase[]
+  productionHistory   ProductionHistory[]
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accountId             String
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+model Project {
+  id                String              @id @default(cuid())
+  userId            String
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name              String
+  fieldName         String
+  wellName          String
+  wellType          WellType            @default(OIL)
+  description       String?
+  status            ProjectStatus       @default(ACTIVE)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  calculationCases  CalculationCase[]
+  productionHistory ProductionHistory[]
+
+  @@index([userId])
+  @@map("project")
+}
+
+model CalculationCase {
+  id            String            @id @default(cuid())
+  projectId     String
+  project       Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  domain        EngineeringDomain
+  moduleType    ModuleType
+  caseName      String
+  unitSystem    UnitSystem
+  inputParams   Json
+  outputResults Json
+  chartSeries   Json
+  notes         String?
+  status        CaseStatus        @default(DRAFT)
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([userId])
+  @@index([projectId, moduleType])
+  @@map("calculation_case")
+}
+
+model ProductionHistory {
+  id                String   @id @default(cuid())
+  projectId         String
+  project           Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  recordDate        DateTime
+  oilRate           Float?
+  gasRate           Float?
+  waterRate         Float?
+  reservoirPressure Float?
+  cumulativeOil     Float?
+  createdAt         DateTime @default(now())
+
+  @@index([userId])
+  @@index([projectId])
+  @@map("production_history")
+}

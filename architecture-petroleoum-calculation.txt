@@ -1,0 +1,372 @@
+================================================================================
+PROJECT IMPLEMENTATION PLAN: PETROCALC SUITE (PETROLEUM ENGINEERING CALCULATOR)
+================================================================================
+
+1. PROJECT METADATA & OVERVIEW
+--------------------------------------------------------------------------------
+* Project Title   : PetroCalc Suite — Petroleum Engineering Calculation & Simulation Platform
+* Version / Date  : v1.0.0 - 2026-11-24
+* Core Purpose    : A full-stack Next.js web application for performing petroleum
+                    engineering calculations across Reservoir, Production, and
+                    Drilling & Well Control domains, featuring interactive curve
+                    visualizations, automatic unit system conversion (Field vs. SI),
+                    and persistent multi-scenario comparison per well.
+* Target Roles    : Guest (Quick Sandbox), Petroleum Engineer (Authenticated User),
+                    Lead Engineer / Admin (Verifier & Master Data)
+* Architecture    : Full-Stack Next.js (App Router) - Feature-Based + Thin Routing
+                    + Prisma ORM & Neon Serverless PostgreSQL
+                    + Material-UI (MUI) Theme-Aware `sx` Prop Styling (Zero Tailwind)
+
+
+2. DEPENDENCIES & INSTALLATION COMMANDS
+--------------------------------------------------------------------------------
+Execute the following commands sequentially to initialize the stack:
+
+[Step 2.1] Create Next.js Project (TypeScript, ESLint, App Router, No Tailwind CSS)
+  npx create-next-app@latest petrocalc-suite --typescript --no-tailwind --eslint --app --src-dir
+  # NOTE: Ensure zero Tailwind CSS imports or utility classes exist in the codebase.
+  # Rely exclusively on Material-UI <CssBaseline /> and the `sx` prop.
+
+[Step 2.2] Core Backend, Database (Prisma + Neon Serverless) & Validation Dependencies
+  npm install zod @prisma/client @neondatabase/serverless @prisma/adapter-neon
+  npm install -D prisma
+
+[Step 2.3] Authentication & Security
+  npm install better-auth
+
+[Step 2.4] Material-UI (MUI), Emotion Engine, Next.js App Router Cache & Icons
+  npm install @mui/material @mui/icons-material @mui/material-nextjs @emotion/react @emotion/styled
+
+[Step 2.5] Engineering Visualization, Data Parsing & Unit Testing Packages
+  npm install recharts                     # Interactive IPR/VLP, DCA Arps, Monte Carlo Histogram/CDF charts
+  npm install @tanstack/react-table        # Headless table logic for Kill Sheet & Case Comparison (rendered via MUI Table)
+  npm install papaparse                    # CSV parser for importing historical production data (DCA)
+  npm install -D @types/papaparse vitest   # Unit testing suite for engineering formulas & unit conversions
+
+
+3. DATABASE SCHEMA & CORE ENTITIES (PRISMA + NEON)
+--------------------------------------------------------------------------------
+Configure the datasource in prisma/schema.prisma to support Neon Connection Pooling
+for runtime queries and a Direct Connection for schema migrations:
+
+  datasource db {
+    provider  = "postgresql"
+    url       = env("DATABASE_URL") // Neon Pooled URL (-pooler) for serverless runtime queries
+    directUrl = env("DIRECT_URL")   // Neon Direct URL (non-pooled) for prisma migrate & db push
+  }
+
+Define the following models, enums, and relationships in prisma/schema.prisma:
+
+* Enums:
+  - Role: ENGINEER | REVIEWER | ADMIN
+  - UnitSystem: FIELD | SI
+  - WellType: OIL | GAS | CONDENSATE
+  - ProjectStatus: ACTIVE | ARCHIVED
+  - EngineeringDomain: RESERVOIR | PRODUCTION | DRILLING
+  - ModuleType: VOLUMETRIC_MONTE_CARLO | DCA_ARPS | MATERIAL_BALANCE |
+                NODAL_ANALYSIS | ARTIFICIAL_LIFT | DRILLING_HYDRAULICS | KILL_SHEET
+  - CaseStatus: DRAFT | VERIFIED
+
+* Entity 1: User
+  - Fields: id (String, @id, @default(cuid())), name (String), email (String, @unique),
+            passwordHash (String), role (Role, @default(ENGINEER)),
+            preferredUnitSystem (UnitSystem, @default(FIELD)),
+            createdAt (DateTime, @default(now())), updatedAt (DateTime, @updatedAt)
+
+* Entity 2: Project (Workspace per Field / Well)
+  - Fields: id (String, @id, @default(cuid())), userId (String, FK -> User.id),
+            name (String), fieldName (String), wellName (String),
+            wellType (WellType, @default(OIL)), description (String?),
+            status (ProjectStatus, @default(ACTIVE)),
+            createdAt (DateTime, @default(now())), updatedAt (DateTime, @updatedAt)
+
+* Entity 3: CalculationCase (Stores simulation inputs, calculated outputs, and plot series)
+  - Fields: id (String, @id, @default(cuid())), projectId (String, FK -> Project.id),
+            userId (String, FK -> User.id), domain (EngineeringDomain),
+            moduleType (ModuleType), caseName (String), unitSystem (UnitSystem),
+            inputParams (Json), outputResults (Json), chartSeries (Json),
+            notes (String?), status (CaseStatus, @default(DRAFT)),
+            createdAt (DateTime, @default(now())), updatedAt (DateTime, @updatedAt)
+
+* Entity 4: ProductionHistory (Time-series production logs for DCA & Material Balance)
+  - Fields: id (String, @id, @default(cuid())), projectId (String, FK -> Project.id),
+            userId (String, FK -> User.id), recordDate (DateTime),
+            oilRate (Float?), gasRate (Float?), waterRate (Float?),
+            reservoirPressure (Float?), cumulativeOil (Float?),
+            createdAt (DateTime, @default(now()))
+
+* Relationships & Indexes:
+  - One User has many Projects and CalculationCases (onDelete: Cascade).
+  - One Project has many CalculationCases and ProductionHistory records (onDelete: Cascade).
+  - Add @@index([userId]) and @@index([projectId, moduleType]) for optimal Neon query performance.
+
+
+4. DIRECTORY STRUCTURE (FEATURE-BASED ARCHITECTURE + MUI `sx` STYLING)
+--------------------------------------------------------------------------------
+Strictly adhere to this directory layout. Keep src/app/ thin and free of domain logic.
+
+├── prisma/
+│   ├── schema.prisma               # Prisma models, Neon datasource & indexes
+│   └── seed.ts                     # Seed script with sample field/well & baseline cases
+├── tests/
+│   └── calculations/               # Vitest unit tests for all formulas & unit conversions
+│       ├── volumetric.test.ts
+│       ├── dca.test.ts
+│       ├── material-balance.test.ts
+│       ├── nodal-analysis.test.ts
+│       ├── artificial-lift.test.ts
+│       ├── drilling-hydraulics.test.ts
+│       ├── kill-sheet.test.ts
+│       └── unit-converter.test.ts
+├── public/                         # Static assets (wellbore diagrams, icons)
+├── src/
+│   ├── app/                        # 1. ROUTING LAYER (URLs, Layouts, Loading/Error)
+│   │   ├── (public)/               # Unauthenticated routes (Landing, Quick Sandbox)
+│   │   │   └── page.tsx
+│   │   ├── (auth)/                 # Authentication routes
+│   │   │   ├── layout.tsx
+│   │   │   ├── login/page.tsx
+│   │   │   └── register/page.tsx
+│   │   ├── (dashboard)/            # Protected routes (Requires Auth)
+│   │   │   ├── layout.tsx          # App Shell (MUI Drawer/AppBar, Unit Toggle, Session Check)
+│   │   │   ├── projects/
+│   │   │   │   ├── page.tsx        # Well/Field Project List & Case Summary
+│   │   │   │   ├── [projectId]/page.tsx # Well Details & Side-by-Side Case Comparison
+│   │   │   │   ├── loading.tsx     # MUI Skeleton fallback
+│   │   │   │   └── error.tsx
+│   │   │   ├── reservoir/
+│   │   │   │   ├── page.tsx        # MUI Tabs: Volumetric (OOIP/OGIP + Monte Carlo), DCA, MatBal
+│   │   │   │   ├── loading.tsx
+│   │   │   │   └── error.tsx
+│   │   │   ├── production/
+│   │   │   │   ├── page.tsx        # MUI Tabs: Nodal Analysis (IPR/VLP) & Artificial Lift
+│   │   │   │   ├── loading.tsx
+│   │   │   │   └── error.tsx
+│   │   │   └── drilling/
+│   │   │       ├── page.tsx        # MUI Tabs: Drilling Hydraulics (Ph/ECD) & Kill Sheet
+│   │   │       ├── loading.tsx
+│   │   │       └── error.tsx
+│   │   ├── api/                    # External webhooks & auth callbacks ONLY
+│   │   │   └── auth/[...all]/route.ts
+│   │   ├── globals.css             # Minimal CSS reset only (NO Tailwind directives)
+│   │   └── layout.tsx              # Root layout (AppRouterCacheProvider, ThemeRegistry)
+│   │
+│   ├── theme/                      # 2. MUI DESIGN SYSTEM & THEME TOKENS
+│   │   ├── theme.ts                # createTheme() palette (primary, oil/gas/water colors, typography)
+│   │   └── theme-registry.tsx      # Client wrapper for ThemeProvider & CssBaseline
+│   │
+│   ├── features/                   # 3. DOMAIN LAYER (Grouped by feature, styled via `sx` prop)
+│   │   ├── auth/
+│   │   │   ├── actions/            # login.ts, register.ts, logout.ts
+│   │   │   ├── components/         # login-form.tsx, register-form.tsx (MUI TextField, Button, Box)
+│   │   │   ├── schemas/            # auth-schema.ts (Zod)
+│   │   │   └── types/              # auth.types.ts
+│   │   │
+│   │   ├── projects/               # Well workspace management & scenario comparison
+│   │   │   ├── actions/            # create-project.ts, update-project.ts, delete-project.ts
+│   │   │   ├── queries/            # get-projects.ts, get-project-by-id.ts
+│   │   │   ├── components/         # project-list.tsx, project-form-dialog.tsx, case-compare-table.tsx
+│   │   │   ├── schemas/            # project-schema.ts
+│   │   │   └── types/              # project.types.ts
+│   │   │
+│   │   ├── reservoir/              # Volumetric/Monte Carlo, DCA Arps, Material Balance
+│   │   │   ├── actions/            # save-reservoir-case.ts, import-production-csv.ts, delete-case.ts
+│   │   │   ├── queries/            # get-reservoir-cases.ts, get-production-history.ts
+│   │   │   ├── components/         # volumetric-monte-carlo-panel.tsx, dca-arps-panel.tsx, material-balance-panel.tsx
+│   │   │   ├── hooks/              # use-monte-carlo-preview.ts
+│   │   │   ├── schemas/            # volumetric-schema.ts, dca-schema.ts, matbal-schema.ts
+│   │   │   └── types/              # reservoir.types.ts
+│   │   │
+│   │   ├── production/             # Nodal Analysis (IPR/VLP) & Artificial Lift Sizing
+│   │   │   ├── actions/            # save-production-case.ts, delete-production-case.ts
+│   │   │   ├── queries/            # get-production-cases.ts
+│   │   │   ├── components/         # nodal-analysis-panel.tsx, artificial-lift-panel.tsx
+│   │   │   ├── hooks/              # use-nodal-solver.ts (real-time MUI Slider calculation)
+│   │   │   ├── schemas/            # nodal-schema.ts, artificial-lift-schema.ts
+│   │   │   └── types/              # production.types.ts
+│   │   │
+│   │   └── drilling/               # Drilling Hydraulics & Kill Sheet Calculator
+│   │       ├── actions/            # save-drilling-case.ts, delete-drilling-case.ts
+│   │       ├── queries/            # get-drilling-cases.ts
+│   │       ├── components/         # hydraulics-ecd-panel.tsx, kill-sheet-panel.tsx
+│   │       ├── schemas/            # hydraulics-schema.ts, kill-sheet-schema.ts
+│   │       └── types/              # drilling.types.ts
+│   │
+│   ├── components/                 # 4. SHARED UI LAYER (Domain-agnostic MUI wrappers)
+│   │   └── shared/                 # Cross-feature UI styled strictly via `sx` prop:
+│   │       ├── unit-system-toggle.tsx      # MUI ToggleButtonGroup (Field Units <-> SI Units)
+│   │       ├── engineering-chart-card.tsx  # MUI Paper/Card wrapper for Recharts + CSV/PNG export
+│   │       ├── save-case-dialog.tsx        # MUI Dialog to persist calculation cases to a Project
+│   │       ├── feedback-snackbar.tsx       # MUI Snackbar + Alert for ActionResponse messages
+│   │       └── empty-state.tsx
+│   │
+│   ├── lib/                        # 5. INFRASTRUCTURE & PURE CALCULATION ENGINE
+│   │   ├── db.ts                   # Singleton PrismaClient + @prisma/adapter-neon
+│   │   ├── auth.ts                 # Better-Auth config with Prisma adapter (Neon)
+│   │   ├── utils.ts                # Number formatters (significant figures, scientific notation)
+│   │   ├── units/
+│   │   │   └── converter.ts        # Unit conversion (psi<->bar, ft<->m, bbl<->m3, ppg<->sg)
+│   │   └── calculations/           # PURE TYPESCRIPT MATH ENGINE (Zero UI / Zero DB imports)
+│   │       ├── reservoir/
+│   │       │   ├── volumetric.ts       # Deterministic OOIP/OGIP & Monte Carlo P10/P50/P90 + CDF
+│   │       │   ├── dca.ts              # Arps Decline (Exponential, Hyperbolic, Harmonic) & EUR
+│   │       │   └── material-balance.ts # Havlena-Odeh (F, Eo, Eg, Efw) & linear regression
+│   │       ├── production/
+│   │       │   ├── nodal-analysis.ts   # IPR (Vogel & Darcy), VLP curve, Bisection solver (Qop, Pwf)
+│   │       │   └── artificial-lift.ts  # ESP (TDH, pump stages) & Gas Lift (valve depth, gas rate)
+│   │       └── drilling/
+│   │           ├── hydraulics.ts       # Ph = 0.052 * MW * TVD, APL, ECD, Fracture Margin
+│   │           └── kill-sheet.ts       # KMW, ICP, FCP, Strokes-to-bit, DP pressure schedule
+│   │
+│   ├── types/                      # 6. GLOBAL TYPES
+│   │   └── action-response.ts      # Standardized Server Action return contract
+│   │
+│   └── middleware.ts               # Edge/Server route guard & role redirects
+├── .env                            # DATABASE_URL, DIRECT_URL, BETTER_AUTH_SECRET (gitignored)
+└── .env.example                    # Safe template of required environment variables
+
+
+5. FEATURE SPECIFICATIONS (QUERIES & ACTIONS)
+--------------------------------------------------------------------------------
+[Feature 1: Projects & Case Workspace (src/features/projects/)]
+  * Queries (src/features/projects/queries/):
+    - get-projects.ts          : Fetch all wells/fields owned by user with saved case counts.
+    - get-project-by-id.ts     : Fetch single well details and all linked CalculationCases for comparison.
+  * Actions (src/features/projects/actions/):
+    - create-project.ts        : Validate via Zod -> Insert Project -> revalidatePath('/projects').
+    - update-project.ts        : Verify ownership -> Update well metadata -> revalidatePath.
+    - delete-project.ts        : Verify ownership -> Delete Project -> revalidatePath.
+
+[Feature 2: Reservoir Engineering (src/features/reservoir/)]
+  * Queries (src/features/reservoir/queries/):
+    - get-reservoir-cases.ts   : Fetch saved cases (Volumetric, DCA, Material Balance) per project.
+    - get-production-history.ts: Fetch time-series production logs for DCA curve plotting.
+  * Actions (src/features/reservoir/actions/):
+    - save-reservoir-case.ts   : Validate physical bounds (0 < phi < 1, 0 <= Sw <= 1) -> Execute
+                                 pure calculation engine on server -> Store inputParams,
+                                 outputResults & chartSeries -> revalidatePath.
+    - import-production-csv.ts : Validate CSV columns (date, oilRate, gasRate, waterRate) ->
+                                 Bulk insert into Neon via prisma.productionHistory.createMany.
+    - delete-reservoir-case.ts : Verify ownership -> Delete case -> revalidatePath.
+
+[Feature 3: Production Engineering (src/features/production/)]
+  * Queries (src/features/production/queries/):
+    - get-production-cases.ts  : Fetch Nodal Analysis (IPR/VLP) & Artificial Lift cases per project.
+  * Actions (src/features/production/actions/):
+    - save-production-case.ts  : Validate IPR (Pr, Pb, PI/qmax) & VLP (tubing ID, WHP, GLR) or
+                                 ESP/Gas Lift inputs -> Compute operating point (Qop, Pwf) on
+                                 server -> Save to Neon -> revalidatePath.
+    - delete-production-case.ts: Verify ownership -> Delete case -> revalidatePath.
+
+[Feature 4: Drilling & Well Control (src/features/drilling/)]
+  * Queries (src/features/drilling/queries/):
+    - get-drilling-cases.ts    : Fetch saved Drilling Hydraulics & Kill Sheet cases per project.
+  * Actions (src/features/drilling/actions/):
+    - save-drilling-case.ts    : Validate TVD, MD, MW, SIDPP, SICP, SCR -> Compute Ph, ECD,
+                                 Fracture Margin, KMW, ICP, FCP & step-down pressure schedule ->
+                                 Save to Neon -> revalidatePath.
+    - delete-drilling-case.ts: Verify ownership -> Delete case -> revalidatePath.
+
+
+6. STRICT CODING RULES & AI AGENT GUARDRAILS
+--------------------------------------------------------------------------------
+[Rule 1] Naming Conventions
+  - Use kebab-case for ALL files and directories (e.g., nodal-analysis-panel.tsx).
+  - Use PascalCase for React component names and TypeScript types/interfaces.
+  - Use camelCase for functions, variables, math formulas, and Server Actions.
+
+[Rule 2] Unidirectional Import Flow
+  - src/app/       -> MAY import from features/, components/, theme/, lib/, types/.
+  - src/features/  -> MAY import from components/, lib/, types/.
+  - src/features/  -> MUST NOT import from src/app/.
+  - Cross-feature imports are STRICTLY FORBIDDEN. Place all shared math engines and
+    unit converters inside src/lib/calculations/ and src/lib/units/.
+
+[Rule 3] Separation of Reads (Queries) and Writes (Actions)
+  - NEVER write direct Prisma queries inside src/app/**/page.tsx.
+  - All SELECT operations MUST reside in features/<name>/queries/ (Server-only).
+  - All INSERT/UPDATE/DELETE operations MUST reside in features/<name>/actions/
+    with the "use server" directive and call revalidatePath() upon success.
+
+[Rule 4] Standardized Server Action Contract (src/types/action-response.ts)
+  Every Server Action MUST return this exact shape:
+
+    export type ActionResponse<T = null> = {
+      success: boolean;
+      message: string;
+      data?: T;
+      errors?: Record<string, string[]>;
+    };
+
+[Rule 5] Security & Data Isolation
+  - Validate 100% of Server Action inputs on the server using Zod schemas.
+  - Verify the authenticated user session inside every query and action.
+  - Always scope database queries by userId (WHERE id = caseId AND userId = session.user.id)
+    to prevent IDOR vulnerabilities.
+  - NEVER expose secret keys (DATABASE_URL, DIRECT_URL, BETTER_AUTH_SECRET) in
+    NEXT_PUBLIC_ environment variables.
+
+[Rule 6] Styling & Design System Architecture (Material-UI `sx` Prop Only — Zero Tailwind)
+  - Tailwind CSS utility classes (`className="flex p-4..."`) are STRICTLY FORBIDDEN.
+  - All layout, spacing, colors, borders, and responsive breakpoints MUST use MUI
+    primitives (`Box`, `Stack`, `Grid`, `Paper`, `Card`, `Typography`) with the
+    theme-aware `sx` prop (e.g., `sx={{ p: 2, bgcolor: 'background.paper', borderRadius: 2 }}`).
+  - Use `useTheme()` from `@mui/material/styles` when passing theme palette tokens to
+    non-MUI props such as `Recharts` stroke/fill colors.
+  - Define domain-specific palette tokens in `src/theme/theme.ts` (e.g., dedicated
+    colors for Oil, Gas, Water, IPR curve, and VLP curve).
+
+[Rule 7] Engineering & Numerical Integrity (Domain Guardrails)
+  - Unit Normalization: All functions inside src/lib/calculations/ MUST operate
+    internally using standard Field Units (psi, ft, bbl, ppg, °F). Convert inputs/outputs
+    from/to SI Units at the UI/Action boundary via src/lib/units/converter.ts.
+  - Physical Boundary Guards: Zod schemas MUST reject physically impossible inputs
+    (e.g., porosity or water saturation outside [0, 1], TVD > MD, negative/zero
+    pressure or mud weight). In Arps DCA, when b === 0 (or |b| < 1e-6), automatically
+    fall back to the Exponential decline equation to prevent division-by-zero.
+  - Deterministic Reproducibility: Monte Carlo volumetric simulations MUST accept an
+    optional PRNG seed so saved scenarios reproduce identical P10/P50/P90 distributions.
+
+
+7. STEP-BY-STEP EXECUTION PLANNING (ROADMAP)
+--------------------------------------------------------------------------------
+[PHASE 1] Project Setup, MUI Theme & Neon Database Infrastructure
+  [ ] Initialize Next.js project with `--no-tailwind` and install all dependencies from Section 2.
+  [ ] Configure `src/theme/theme.ts` and `src/theme/theme-registry.tsx`, then wrap
+      `src/app/layout.tsx` with `<AppRouterCacheProvider>` and `<ThemeRegistry>`.
+  [ ] Provision a PostgreSQL project in Neon Console and configure `.env` and `.env.example`
+      with `DATABASE_URL` (pooled `-pooler` URL) and `DIRECT_URL` (direct non-pooled URL).
+  [ ] Configure singleton `PrismaClient` with `PrismaNeon` adapter in `src/lib/db.ts` and
+      define `ActionResponse<T>` in `src/types/action-response.ts`.
+  [ ] Write `prisma/schema.prisma`, run `npx prisma migrate dev --name init`, and execute
+      `npx prisma db seed` to populate a sample well with baseline calculation cases.
+
+[PHASE 2] Authentication & Project Workspace Foundation
+  [ ] Configure Better-Auth with `prismaAdapter` in `src/lib/auth.ts` and `src/app/api/auth/[...all]/route.ts`.
+  [ ] Build auth feature (login, register, logout) using MUI components (`TextField`, `Button`, `Box`)
+      styled via `sx` prop, and protect dashboard routes in `src/middleware.ts`.
+  [ ] Build projects feature (well/field CRUD) and global `unit-system-toggle.tsx` component.
+
+[PHASE 3] Core Calculation Engine & Unit Testing (Pure TypeScript)
+  [ ] Implement `src/lib/units/converter.ts` and write Vitest unit tests.
+  [ ] Implement Reservoir math engine (`volumetric.ts` + Monte Carlo, `dca.ts`, `material-balance.ts`)
+      and verify numerical accuracy against textbook/spreadsheet benchmarks in Vitest.
+  [ ] Implement Production math engine (`nodal-analysis.ts` IPR-VLP bisection solver, `artificial-lift.ts`) + tests.
+  [ ] Implement Drilling math engine (`hydraulics.ts`, `kill-sheet.ts`) + tests.
+
+[PHASE 4] Feature UI (MUI `sx` Prop) & Interactive Visualization (MVP Prioritized)
+  [ ] Batch 1 (MVP Core): Build UI & Actions for Volumetric Reserve (OOIP/OGIP + Monte Carlo
+      Histogram/CDF) and Nodal Analysis (IPR & VLP intersection chart with real-time MUI Sliders).
+  [ ] Batch 2 (Advanced Reservoir & Production): Build UI & Actions for Decline Curve Analysis
+      (Arps + CSV production history upload via `createMany`), Material Balance (Havlena-Odeh),
+      and Artificial Lift Sizing (ESP / Gas Lift).
+  [ ] Batch 3 (Drilling & Well Control): Build UI & Actions for Drilling Hydraulics (Ph, ECD,
+      Fracture Margin gauge) and Kill Sheet Calculator (MUI Table drillpipe pressure schedule).
+
+[PHASE 5] Case Comparison, Export & Build Verification
+  [ ] Build side-by-side `CalculationCase` comparison table at `/projects/[projectId]`.
+  [ ] Add CSV and print-ready engineering report export for calculation results and charts.
+  [ ] Add `loading.tsx` (MUI Skeleton), `error.tsx`, `empty-state.tsx`, and MUI `Snackbar` + `Alert` feedback.
+  [ ] Run `npx vitest run`, `npx tsc --noEmit`, and `npm run build` to verify zero test failures,
+      zero TypeScript errors, and a clean production build.
+================================================================================

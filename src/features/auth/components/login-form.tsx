@@ -85,7 +85,7 @@ export function LoginForm() {
           )}
 
           <Box component="form" onSubmit={handleSubmit} sx={{ width: '100%' }}>
-            <Stack spacing={2.5}>
+            <Stack spacing={3.5}>
               <TextField
                 label="Engineering Corporate Email"
                 type="email"
